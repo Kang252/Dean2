@@ -1,8 +1,8 @@
 // src/screens/ChatScreen.tsx
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { 
   View, TouchableOpacity, Text, StyleSheet, 
-  ActivityIndicator, KeyboardAvoidingView, Platform 
+  ActivityIndicator, Platform 
 } from 'react-native';
 import { GiftedChat, IMessage, User } from 'react-native-gifted-chat';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -21,17 +21,32 @@ const ChatScreen = () => {
   const { chatId, chatName } = route.params;
 
   const [messages, setMessages] = useState<IMessage[]>([]);
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(auth.currentUser);
+  
+  // --- SỬA LỖI: Thay đổi cách quản lý state người dùng ---
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null); // 1. Khởi tạo là null
+  const [authLoading, setAuthLoading] = useState(true); // 2. Thêm state loading
+
+  const giftedChatUser = useMemo(() => {
+    // Nếu currentUser (từ state) tồn tại, tạo đối tượng user
+    if (currentUser) {
+      return { _id: currentUser.uid };
+    }
+    // Nếu không, trả về một đối tượng rỗng (sẽ không được dùng vì ta có check loading)
+    return { _id: '' }; 
+  }, [currentUser]);
 
   useEffect(() => {
+    // 3. Listener này là nguồn chân lý duy nhất
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
+      setCurrentUser(user); // Đặt user (dù là null hay có giá trị)
+      setAuthLoading(false); // Báo là đã kiểm tra auth xong
     });
     return unsubscribeAuth;
   }, []);
 
   useEffect(() => {
-    if (!chatId) return;
+    // Chỉ chạy khi đã kiểm tra auth VÀ có user
+    if (!chatId || !currentUser) return;
 
     const messagesRef = collection(db, 'chats', chatId, 'messages');
     const q = query(messagesRef, orderBy('createdAt', 'desc'));
@@ -50,7 +65,7 @@ const ChatScreen = () => {
     });
 
     return () => unsubscribeSnapshot();
-  }, [chatId]);
+  }, [chatId, currentUser]); // Thêm currentUser vào dependency
 
   const onSend = useCallback(async (messages: IMessage[] = []) => {
     if (!currentUser) return;
@@ -71,7 +86,8 @@ const ChatScreen = () => {
 
   }, [chatId, currentUser]);
 
-  if (!currentUser) {
+  // --- SỬA LỖI: 4. Check authLoading trước ---
+  if (authLoading) {
     return (
       <SafeAreaView style={styles.loadingContainer}>
         <ActivityIndicator size="large" />
@@ -80,10 +96,15 @@ const ChatScreen = () => {
     );
   }
 
+  // Nếu đã hết loading VÀ vẫn không có user, quay lại
+  if (!currentUser) {
+    navigation.goBack();
+    return null;
+  }
+
+  // --- Chỉ render phần dưới đây khi authLoading=false VÀ currentUser có giá trị ---
   return (
-    // Sử dụng View bọc ngoài
     <View style={styles.container}>
-      {/* 1. Header được bọc trong SafeAreaView riêng */}
       <SafeAreaView edges={['top']} style={styles.headerSafeArea}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
@@ -94,20 +115,15 @@ const ChatScreen = () => {
         </View>
       </SafeAreaView>
       
-      {/* 2. KeyboardAvoidingView bọc GiftedChat */}
-      <KeyboardAvoidingView 
-        style={{ flex: 1 }} 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
+      <View style={{ flex: 1 }}>
         <GiftedChat
           messages={messages}
           onSend={(messages) => onSend(messages)}
-          user={{
-            _id: currentUser.uid,
-          }}
+          user={giftedChatUser} // <-- Đối tượng này giờ đã ổn định
           placeholder="Nhập tin nhắn..."
+          // Không cần disableComposer nữa, vì chúng ta đã check currentUser ở trên
         />
-      </KeyboardAvoidingView>
+      </View>
     </View>
   );
 };
