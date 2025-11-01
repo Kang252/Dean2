@@ -13,6 +13,10 @@ import { ChatStackParamList } from '../navigation/ChatStackNavigator';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 
+// Chúng ta vẫn cần import KeyboardProvider, nhưng bọc ở App.tsx
+// (Hãy chắc chắn bạn đã bọc AppNavigator bằng KeyboardProvider trong App.tsx)
+import { KeyboardProvider } from 'react-native-keyboard-controller';
+
 type ChatScreenRouteProp = RouteProp<ChatStackParamList, 'Chat'>;
 
 const ChatScreen = () => {
@@ -21,31 +25,28 @@ const ChatScreen = () => {
   const { chatId, chatName } = route.params;
 
   const [messages, setMessages] = useState<IMessage[]>([]);
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   
-  // --- SỬA LỖI: Thay đổi cách quản lý state người dùng ---
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null); // 1. Khởi tạo là null
-  const [authLoading, setAuthLoading] = useState(true); // 2. Thêm state loading
+  // --- SỬA LỖI: Thêm state để kiểm soát input ---
+  const [inputText, setInputText] = useState("");
 
   const giftedChatUser = useMemo(() => {
-    // Nếu currentUser (từ state) tồn tại, tạo đối tượng user
     if (currentUser) {
       return { _id: currentUser.uid };
     }
-    // Nếu không, trả về một đối tượng rỗng (sẽ không được dùng vì ta có check loading)
     return { _id: '' }; 
   }, [currentUser]);
 
   useEffect(() => {
-    // 3. Listener này là nguồn chân lý duy nhất
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user); // Đặt user (dù là null hay có giá trị)
-      setAuthLoading(false); // Báo là đã kiểm tra auth xong
+      setCurrentUser(user);
+      setAuthLoading(false);
     });
     return unsubscribeAuth;
   }, []);
 
   useEffect(() => {
-    // Chỉ chạy khi đã kiểm tra auth VÀ có user
     if (!chatId || !currentUser) return;
 
     const messagesRef = collection(db, 'chats', chatId, 'messages');
@@ -65,9 +66,10 @@ const ChatScreen = () => {
     });
 
     return () => unsubscribeSnapshot();
-  }, [chatId, currentUser]); // Thêm currentUser vào dependency
+  }, [chatId, currentUser]);
 
-  const onSend = useCallback(async (messages: IMessage[] = []) => {
+  // Tách hàm onSend ra
+  const handleSend = useCallback(async (messages: IMessage[] = []) => {
     if (!currentUser) return;
     
     const messageToSend = messages[0];
@@ -86,7 +88,14 @@ const ChatScreen = () => {
 
   }, [chatId, currentUser]);
 
-  // --- SỬA LỖI: 4. Check authLoading trước ---
+  // --- SỬA LỖI: Tạo hàm wrapper cho onSend ---
+  // Hàm này sẽ được gọi bởi GiftedChat
+  const onSendWrapper = (messages: IMessage[]) => {
+    handleSend(messages); // Gửi tin nhắn lên Firebase
+    setInputText(""); // Xóa văn bản trong state của chúng ta
+  };
+
+
   if (authLoading) {
     return (
       <SafeAreaView style={styles.loadingContainer}>
@@ -96,13 +105,12 @@ const ChatScreen = () => {
     );
   }
 
-  // Nếu đã hết loading VÀ vẫn không có user, quay lại
   if (!currentUser) {
     navigation.goBack();
     return null;
   }
 
-  // --- Chỉ render phần dưới đây khi authLoading=false VÀ currentUser có giá trị ---
+  // Lưu ý: Đảm bảo App.tsx đã được bọc bằng KeyboardProvider
   return (
     <View style={styles.container}>
       <SafeAreaView edges={['top']} style={styles.headerSafeArea}>
@@ -118,10 +126,15 @@ const ChatScreen = () => {
       <View style={{ flex: 1 }}>
         <GiftedChat
           messages={messages}
-          onSend={(messages) => onSend(messages)}
-          user={giftedChatUser} // <-- Đối tượng này giờ đã ổn định
+          user={giftedChatUser}
           placeholder="Nhập tin nhắn..."
-          // Không cần disableComposer nữa, vì chúng ta đã check currentUser ở trên
+          
+          // --- SỬA LỖI: Thêm 2 props dưới đây ---
+          text={inputText} // 1. Cung cấp text từ state
+          onInputTextChanged={text => setInputText(text)} // 2. Cập nhật state khi gõ
+
+          // --- SỬA LỖI: Gọi hàm wrapper ---
+          onSend={onSendWrapper} 
         />
       </View>
     </View>
